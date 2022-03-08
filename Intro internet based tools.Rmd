@@ -48,6 +48,8 @@ rsv1   <-    gtrends(keyword='rsv',
 
 
 str(rsv1)
+#saveRDS(rsv1, './Data/rsv_trends_ny')
+#rsv1 <- readRSV(rsv1, './Data/rsv_trends_ny')
 ```
 
 See related topics
