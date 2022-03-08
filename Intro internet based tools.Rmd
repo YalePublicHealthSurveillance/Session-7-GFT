@@ -297,7 +297,7 @@ terms1 <- c('loss of smell', "i can't smell", 'symptoms of covid19', 'how long d
 terms2 <- c('where to get a covid vaccine','how long do i have to quarantine','incubation period', 'immunity','covid testing near me')
 
 #Pre-downloaded files
-compiled1 <- readRDS(compiled1,'./Data/covid_search_trends_fl_ma.rds')
+compiled1 <- readRDS('./Data/covid_search_trends_fl_ma.rds')
 
 ```
 
