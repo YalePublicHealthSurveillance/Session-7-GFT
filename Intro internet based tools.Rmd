@@ -92,6 +92,9 @@ rsv2   <-    gtrends(keyword='rsv',
                      time = "today+5-y" #over what time range?
                      )
 
+rsv2$interest_over_time$hits <- as.numeric(rsv2$interest_over_time$hits)
+
+
 ggplot(rsv2$interest_over_time, aes(x=date, y=hits)) +
   geom_line()+
   theme_classic()
