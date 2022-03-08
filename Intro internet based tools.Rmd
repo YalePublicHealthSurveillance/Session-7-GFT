@@ -1,0 +1,699 @@
+---
+title: "EMD 539 Exercise using Google Trend and Google Correlate"
+author: "Dan Weinberger and Kayoko Shioda"
+date: "March 9, 2022"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+## Set up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#devtools::install_github("PMassicotte/gtrendsR") #install dev version, otherwise get error
+
+# Load packages
+library(reshape2)
+library(lubridate)
+library(MASS)
+library(gtrendsR)
+library(ggplot2)
+library(pbapply)
+library(MMWRweek)
+library(geofacet)
+library(plotrix)
+
+source('./R/nogrid_theme.R')
+#source('./R/setup_data.R')
+```
+
+## Part 1: Tracking RSV seasonality post-COVID with Google searches
+
+We can use the gtrendsR package to pull data. You can specific the
+search term(s) that you want data for, the geographic resolution,
+whether you want web/Youtube/shopping results
+
+```{r}
+rsv1   <-    gtrends(keyword='rsv', 
+                     geo = c("US-NY"), 
+                     category = 0,  
+                     gprop='web', #web/Youtube/ shopping/news
+                     time = "today+5-y" #over what time range?
+                     )
+
+
+str(rsv1)
+```
+
+See related topics
+
+```{r}
+print(rsv1$related_topics)
+```
+
+See related searches
+
+```{r}
+print(rsv1$related_queries)
+```
+
+View time series
+
+```{r}
+
+ggplot(rsv1$interest_over_time, aes(x=date, y=hits)) +
+  geom_line()+
+  theme_classic()
+```
+
+## Narrow down search to specific categories
+
+View all the categories Google has
+
+```{r}
+
+data("categories")
+
+View(categories)
+```
+
+```{r}
+rsv2   <-    gtrends(keyword='rsv', 
+                     geo = c("US-NY"), 
+                     category = 419,  #419=health conditions
+                     gprop='web', #web/Youtube/ shopping/news
+                     time = "today+5-y" #over what time range?
+                     )
+
+ggplot(rsv2$interest_over_time, aes(x=date, y=hits)) +
+  geom_line()+
+  theme_classic()
+
+```
+
+## What if we want to do this for **all** states in the US?
+
+Step 1: create a list of the state abbreviations. The format for Gtrends
+for US states is 'US-XX' where XX is the 2 digit state abbreviation
+
+```{r}
+state.abb.us <- paste0('US-', state.abb)
+
+state.abb.us
+```
+
+Step 2 create a vector with all the search terms you want to include
+
+```{r}
+searches <- c('rsv', 'bronchiolitis')
+```
+
+Then repeat the query to Google for every state and search term combo.
+we use lapply here, which repeatedly runs a function over different
+elements of a list. We won't run this code because it takes several
+minutes
+
+```{r}
+# state.trends <- pblapply(state.abb.us, function(x) {
+#     lapply(searches, function(y){
+#         gtrends(keyword=y, geo = c(x), category = 0, gprop='web')
+#     })
+#   }
+# )
+# 
+# saveRDS(state.trends, './Data/all.state.data.rds')
+
+state.trends <- readRDS('./Data/all.state.data.rds')
+
+
+```
+
+Data are also available by metropolitan area in the US. See
+<https://github.com/DanWeinberger/rsv_covid/blob/master/rsv_covid.Rmd>
+for details on how to extract metro-level trends.
+
+You can get similar data for other countries. For examples, this code
+uses country-specific search terms. ZA=S Africa BR=Brazil FR=France FR-J
+= Paris GB= Great Britain
+
+```{r}
+test.grps <- list( c( 'RSV','ZA' ), 
+                  c('bronquiolitis', 'AR'), 
+                  c('bronquiolite','BR'),
+                  c('bronchiolite','FR'),
+                  c('bronchiolite','FR-J'),
+                  c('RSV','GB')
+      )
+names(test.grps) <- c('S. Africa','Argentina', 'Brazil','France', 'France-Paris region')
+
+#country.trends <- lapply(test.grps, function(x) gtrends(keyword=x[1], geo = x[2], category = 0, gprop='web',onlyInterest=T))
+
+```
+
+## Let's pull together the data for all of the states and map it
+
+Pull out the 'interest over time' data frame for each state into a list
+called 'l2'
+
+```{r}
+l2 <- lapply(state.trends,function(x) lapply(x, '[[','interest_over_time'))
+```
+
+'combine the different search data frames for each state into a single
+data frame for the state and save it as 'l3'
+
+```{r}
+l3 <- lapply(l2, function(x) do.call( 'rbind.data.frame', x))
+```
+
+combine all the data frames and save it as d1
+
+```{r}
+d1 <- do.call( 'rbind.data.frame', l3)
+```
+
+Now prepare the data for mapping
+
+Assign each date a week number, according to the CDC's MMWR numbering
+system
+
+```{r}
+dates2 <- MMWRweek(as.Date(d1$date)) #For each date, determine the year and week according to the MMWR calendar
+
+d1 <- cbind.data.frame(d1,dates2[,c('MMWRyear', 'MMWRweek')])
+
+max.wk.yr <-  max(d1$MMWRweek[d1$MMWRyear==2021] )
+```
+
+Define an epidemiological year (epiyr) as July-June and renumber the
+weeks accordingly (epiwk)
+
+```{r}
+
+d1$epiyr <- d1$MMWRyear
+d1$epiyr[d1$MMWRweek<=max.wk.yr] <- d1$MMWRyear[d1$MMWRweek<=max.wk.yr] - 1
+d1$epiwk <- d1$MMWRweek
+d1$epiwk[d1$MMWRweek<=max.wk.yr] <- d1$MMWRweek[d1$MMWRweek<=max.wk.yr] + 52
+```
+
+Reshape the dataset
+
+```{r}
+d1$state <- substr(d1$geo,4,5)
+
+d1$hits <- as.numeric(d1$hits)
+
+df1 <- dcast(d1[d1$keyword=='rsv',] , epiyr+epiwk+state~., fun.aggregate = sum, value.var='hits')
+names(df1) <- c('epiyr','epiwk','state','cases')
+
+df1$epiyr <- as.factor(df1$epiyr) #declare epiyr as a factor
+
+```
+
+Now let's make a cool plot. Each state will have a pandel, arranged
+based on geography. We can do this relatively easily using ggplot
+combined with facet_geo()
+
+What color do you want for your lines?
+
+```{r}
+
+cols <- c(rep('gray',3),rgb(1,0,0,0.5),'blue','blue')
+```
+
+What pattern of line do you want? 1= solid, 2=dashed, 3=dotted
+
+```{r}
+ltypes <- c(rep(1,3),2,1,1)
+```
+
+The grid defines the placement for each plot based on coordinates of the
+state. We are going to get rid of Alaska and Hawaii and Washington DC
+from the map. So take the us_state_grid and remove the corresponding
+rows, and save it as 'my_us_grid'
+
+```{r}
+my_us_grid <- us_state_grid1[c(-2, -11,-51), ]
+```
+
+```{r}
+theme_set(theme_minimal())
+
+p1 <- ggplot(df1, aes(x = epiwk,  y = cases, group = epiyr,  colour = epiyr)) +
+    geom_line(aes(lty = epiyr)) +
+
+    facet_geo( ~ state, grid = my_us_grid) + #This is what defines the regions to plot
+  scale_color_manual(values = cols) + #color of the lines
+  scale_linetype_manual(values = ltypes) + #line pattern
+  
+  labs(title = "Searches for 'RSV' in the US (Google trends)",
+       x = element_blank(),
+       y = element_blank()) +
+  nogrid_theme() #turns off the grid and y axes and gets rid of label boxes
+
+
+p1
+```
+
+## Part 2: How do our COVID-tracking search terms perform
+
+In class, you suggested the following terms might track well with COVID
+data:
+
+-   Loss of smell / I can't smell
+
+-    Symptoms of covid19
+
+-   How long does covid last
+
+-   Mask mandates
+
+-   Where to get a covid vaccine
+
+-    How long do I have to quarantine
+
+-   Incubation period
+
+-   Immunity
+
+-   Covid testing near me
+
+Let's try to pull these search terms for MA and for FL
+
+```{r, fig.width=8, fig.height=6}
+
+terms1 <- c('loss of smell', "i can't smell", 'symptoms of covid19', 'how long does covid last', 'mask mandates')
+
+terms2 <- c('where to get a covid vaccine','how long do i have to quarantine','incubation period', 'immunity','covid testing near me')
+
+#Pre-downloaded files
+compiled1 <- readRDS(compiled1,'./Data/covid_search_trends_fl_ma.rds')
+
+```
+
+```{r}
+p1 <- ggplot(compiled1[compiled1$date>='2020-03-01',], aes(x=date, y=hits, group=keyword, col=keyword)) +
+  geom_line() +
+  facet_wrap(~geo)
+
+p1
+```
+
+Import COVID case data from CDC
+
+```{r}
+#pre-downloaded
+a1 <- readRDS('./Data/cdc_covid_data.rds')
+
+p2 <- ggplot(a1, aes(weekdate, y=new_case))+
+  geom_line() +
+  facet_wrap(~state)
+p2
+```
+
+Combine the search data and the CDC case data
+
+```{r}
+compiled1$state <- substr(compiled1$geo, 4,5)
+
+compiled1$date <- as.Date(compiled1$date)
+
+compiled1.c <- reshape2::dcast(compiled1, date+ state ~keyword, value.var='hits' )
+
+a1$weekdate <- as.Date(a1$weekdate)
+
+a1 <- as.data.frame(a1)
+
+b1 <- merge(compiled1.c, a1, by.x=c('state','date'), by.y=c('state','weekdate') )
+
+```
+
+Only look at period after June 1, 2020 due to insufficient testing in
+Spring 2020
+
+```{r}
+
+b1 <- b1[b1$date>='2020-06-01',]
+names(b1) <- gsub(' ', '',names(b1))
+
+```
+
+Look at correlations between search terms and cases
+```{r}
+varnames <- names(b1)[-c(1:2)]
+
+cor.MA <- cor(b1[b1$state=='MA',varnames])
+
+cor.FL <- cor(b1[b1$state=='FL',varnames])
+```
+
+Simple regression model; Fit to pre-Omicron FL data, see how well it predicts Omicron FL and MA data
+
+```{r}
+
+
+b1$pre_omicron_FL <- b1$new_case
+b1$pre_omicron[b1$date>='2021-12-01' & b1$state=='MA'] <- NA
+
+mod1 <- glm(pre_omicron ~ covidtestingnearme + howlongdoescovidlast + incubationperiod + lossofsmell, family='poisson', data=b1)
+  
+summary(mod1)
+
+b1$pred <- predict(mod1,typ='response', newdata=b1 )
+
+
+p2 +
+  geom_line(data=b1, aes(x=date, y=pred), col='red', lty=2) +
+  theme_classic()+
+  geom_vline(xintercept = as.Date('2021-12-01'), lty=2, col='gray')
+```
+
+## Part 3: Generate predictions for diarrhea at NYC EDs using model averaging (Google correlate)
+
+The Google correlate public page is no longer active. But when it was,
+you could upload any time series and obtain time series of search volume
+for the top 100 best-correlated search terms
+
+Today, we will use syndromic disease data on diarrhea from NYC EDs,
+saved in `nyc diarrhea syndromic raw.csv`.
+
+Here are steps:
+
+1.  Create age-stratified weekly time series data on diarrhea syndromic
+    visits to NYC EDs.
+2.  Go to Google Correlate and obtain time series for 100 top-correlated
+    search terms.
+3.  Choose relevant search terms from top 100 search terms.
+4.  Fit negative binomial regression models with or without a relevant
+    search term, controlling for seasonality and long-term trend, to the
+    "training" data. Generate predictions for the rest of the data.
+5.  Calculate "average" predictions using AIC model weight.
+
+### Part 3-1: Create age-stratified weekly time series data on diarrhea
+
+(setup not shown)
+
+```{r}
+diar.18.64 <- read.csv('./Data/nyc diarrhea 18_64.csv', head=F)
+
+names(diar.18.64) <- c('date','cases') #rename variables
+ 
+diar.18.64$date <- as.Date(diar.18.64$date)  #declare date variable
+```
+
+### Part 3-2: Obtain time series for 100 top-correlated search terms from Google Correlate
+
+(Note: the public interface for Google correlate is no longer available)
+
+Let's import a generated csv file for the data on top 100 search terms
+correlated with diarrhea data from NYC EDs, and look at variable names.
+
+NOTE: Note that the data do not start in Row 1 in the csv file. First 10
+rows have data descriptions. Thus, in the `read.table` function, we need
+to set `skip`.
+
+```{r}
+# Import the csv file
+corr1 <- read.table('./Data/correlate-nyc_diar_18_64y_log.csv', sep=',', skip=11, header=T)
+
+# Look at variable names
+names(corr1) # Top 100 search terms
+```
+
+### Part 3-3: Choose relevant search terms
+
+Among these top 100 search terms, extract just the relevant search
+terms.
+
+```{r}
+# The following terms will be kept in a new dataset.
+# (Emetrol is a nausea treatment and augmentin is an antibiotic.)
+keep.terms <- c("gi.virus", "viral.gastroenteritis", "gi.bug", "emetrol", "augmentin", "stomach.virus")
+
+# Only keep the relevant search terms and the "Date" variable in a new dataset.
+corr2 <- corr1[,c('Date', keep.terms)]
+corr2$Date<-as.Date(corr2$Date)
+```
+
+Make time series plots for the relevant search terms.
+
+```{r}
+# Change the class of the "Date" variable from factor to Date.
+
+# Make time series plots
+par(mfrow=c(1,1))
+matplot(x=as.Date(corr2$Date), 
+        y=corr2[,-1],  #plot everything except first column
+        type='l', #line plot
+        bty='l', #turn off top and right border
+        main="Time series for the relevant search terms", ylab="Counts in a log scale", xlab="Date")
+legend("top", colnames(corr2)[-1], col=seq_len(ncol(corr2)-1), cex=0.8, fill=seq_len(ncol(corr2)-1), bty="n")
+```
+
+Merge the original diarrhea data with the search term data.
+
+```{r}
+# Time periods are different in these data, so the data have to be merged by date.
+summary(as.Date(diar.18.64[,1]))
+
+summary(corr2$Date)
+```
+
+```{r}
+# Define column names for the "diar.18.64" dataset
+diar.18.64 <- as.data.frame(diar.18.64) # diar.18.64 is a matrix, so change it to data frame
+
+colnames(diar.18.64) <- c("Date", "diar.18.64")
+```
+
+```{r}
+# Change variable types
+str(diar.18.64)
+diar.18.64$Date <- as.Date(diar.18.64$Date)
+diar.18.64$diar.18.64 <- as.numeric(as.character(diar.18.64$diar.18.64))
+```
+
+```{r}
+# Merge two datasets by date
+corr3 <- merge(diar.18.64, corr2, by = "Date")
+```
+
+```{r}
+# Check
+head(corr3)
+summary(corr3$Date)
+```
+
+### Part 3-4a: Generate prediction for the diarrhea data (Baseline comparison model)
+
+OK, now the data have been prepared. Let's first make a simple
+regression model with no seaarch terms. We will control for seasonality
+and long-term trends using harmonic terms and linear trend term. We will
+fit a negative binomial regression using `glm.nb`. This will be a
+baseline comparison model.
+
+```{r}
+# Create a linear trend term
+corr3$t <- 1:nrow(corr3)
+
+# Create harmonic terms to control for annual seasonality
+corr3$sin52 <- sin(2*pi*corr3$t/52.1429)
+corr3$cos52 <- cos(2*pi*corr3$t/52.1429)
+
+# Create harmonic terms to control for biannual seasonality
+corr3$sin26 <- sin(2*pi*corr3$t*2/52.1429)
+corr3$cos26 <- cos(2*pi*corr3$t*2/52.1429)
+```
+
+We will fit the model to the "training" data, and generate prediction
+for the rest of the data.
+
+```{r}
+# Create a "training" data
+corr3$training.data <- corr3$diar.18.64
+
+corr3$training.data[(nrow(corr3)-260):nrow(corr3)] <- NA # Hold out last 5 years of data to be used for evaluation
+
+# Check
+corr3$training.data
+```
+
+Fit the baseline comparison model to the "training" data and save the
+results as `baseline.model`.
+
+```{r}
+# Baseline comparison model
+baseline.model <- glm.nb(training.data ~ sin52 + cos52 + sin26 + cos26 + t, data=corr3)
+
+# See results
+summary(baseline.model)
+```
+
+Generate predictions and extrapolate to the testing period (last 5
+years).
+
+```{r}
+corr3$pred.baseline <- predict(baseline.model, newdata=corr3, type='response')
+```
+
+Create a plot to compare observed vs. model-fitted values.
+
+```{r}
+
+p1 <- ggplot( corr3, aes(x=Date, y=pred.baseline))+
+  geom_line() +
+  theme_classic() +
+  ylim(0, NA) +
+  ylab('Number of ED visits')+
+  ggtitle('Diarrhea from NYC EDs (Observed vs. model fitted)') +
+  geom_line(data=corr3, aes(x=Date ,y=diar.18.64), col='gray') +
+  geom_vline(xintercept=corr3$Date[nrow(corr3)-260], lty=2, col="blue")
+
+
+p1
+
+```
+
+**Question** What do you think about the prediction by this baseline
+comparison model? Does it fit well to the data in the testing period
+(last 5 years)?
+
+### Part 3-4b: Generate prediction for the diarrhea data (Models with search data included)
+
+Now let's try to improve on this baseline model using covariates (i.e.,
+search terms). In a loop, let's test each of the variables listed in
+`keep.terms`.
+
+Define a function that let's you add in different covariates o top of
+the harmonics and trend
+
+```{r}
+
+mod.func <- function(add.vars){
+  # Select i-th term in "keep.terms" and add it in the formula
+  model.formula <- as.formula(paste0('training.data ~ sin52 + cos52 + sin26 + cos26 + t +', add.vars))
+
+  # Fit a negative binomial regression
+  mod2 <- glm.nb(model.formula, data=corr3)
+  return(mod2)
+}
+
+```
+
+Run the model for each individual term we might want to add
+
+```{r}
+model.results <- lapply(keep.terms, mod.func)
+```
+
+# Combine together basic model results with other model results
+
+```{r}
+model.results <- c(model.results, list(baseline.model)) 
+```
+
+Let's generate predictions using each model and compare to the observed.
+sapply runs the same function for each item in a list and combines
+results into a matrix/array
+
+```{r}
+# Generate predictions
+model.preds <- sapply(model.results, predict, newdata=corr3, type='response', simplify='array')
+
+```
+
+Plot the
+
+```{r}
+par(mfrow=c(1,1))
+matplot(model.preds, type='l', bty='l', ylim=c(0, max(corr3$diar.18.64)), ylab="Number of ED visits", xlab="Date", main="Diarrhea from NYC EDs (Observed vs. model fitted)")
+
+points(corr3$diar.18.64,cex=0.5, col="grey", type='l') # Observed data
+
+abline(v=nrow(corr3)-260, lty=2, col="blue")
+
+legend("topleft", c(keep.terms, "baseline"), col=seq_len(7), cex=0.7, fill=seq_len(7), bty="n")
+```
+
+### Part 3-5: Calculate "average" predictions using AIC model weight
+
+Now extract the AIC score for each of the models.
+
+AIC scores provide a measure of model fit and are penalized by model
+complexity. If you add a variable that increases the fit only a little
+bit, the AIC score might not improve because we are penalizing the
+model. It is calculated by calculating the model negative log-likelihood
+and the number of variables. Smaller numbers are better. The absolute
+value of AIC scores is meaningless, but a change in the AIC score of 2
+or more between models is considered a meaningful improvement.
+
+NOTE OF CAUTION: when comparing models by AIC score, you can only
+compare models where the outcome variable is *exactly* the same. If an
+observation is missing in one model but not others, they cannot be
+compared.
+
+This analysis suggests that the search terms "viral.gastroenteritis",
+"gi.bug", and "stomach.virus" all provide better fits to the data
+compared to the base model.
+
+```{r}
+# For example, let's take a look at the result from the first model (which uses "gi.virus")
+summary(model.results[[1]])
+model.results[[1]]$aic # AIC value for this model
+
+# Extract AIC values from all models
+aics <- sapply(model.results, AIC)
+mods <- c(keep.terms,'baseline.model')
+cbind(mods, aics)
+```
+
+AIC values can be used to average the models together. Let's take the
+AIC scores and convert them to **model weights**.
+
+Weight for Model "m" can be calculated as follows:
+
+$$ Weight for Model_m = exp(\frac{-0.5*\Delta AIC_m}{\sum_{i=1}^{M}(-0.5*\Delta AIC_i)}) $$
+
+where M is the number of models considered (7 in our case) and \$
+\Delta AIC_m \$ is a differece between AIC from Model m and the smallest
+AIC (i.e., AIC from the "best" model).
+
+In this instance, almost all of the weight goes to the model with
+searches for "viral.gastroenteritis" and a small amount of weight to
+"gi.virus" and "augmentin".
+
+```{r}
+# First, calculate delta AIC (i.e., Difference between AIC from each model and the smallest AIC)
+delta.aic <- aics - min(aics)
+
+# Calculate a weight for each model
+model.weights <- round(exp(-0.5*delta.aic)/sum(exp(-0.5*delta.aic)), 3)
+
+# Check
+cbind(mods, aics,model.weights)
+```
+
+Average the predictions from all models using AIC model weights.
+
+```{r}
+# Create an empty matrix to store results
+weighted.piece <- matrix(NA, nrow=nrow(model.preds), ncol=ncol(model.preds))
+
+# Calculate "weighted" prediction
+for(i in 1:ncol(weighted.piece)){
+  weighted.piece[,i] <- model.preds[,i] * model.weights[i]
+}
+
+# Obtain averaged predictions
+corr3$ave.pred <- rowSums(weighted.piece)
+
+p1 +
+  geom_line(data=corr3, aes(x=Date, y=ave.pred), col='red')
+  
+
+```
